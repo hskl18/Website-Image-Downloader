@@ -112,8 +112,8 @@ export default function Home() {
             bmp, ico, avif)
           </li>
           <li>
-            <strong>Icons:</strong> Favicons, apple-touch-icons, and manifest
-            icons
+            <strong>Icons & Favicons:</strong> favicon.ico, apple-touch-icons,
+            mask-icons, and manifest icons
           </li>
           <li>
             <strong>Logos:</strong> Images with "logo" in alt text, class, or ID

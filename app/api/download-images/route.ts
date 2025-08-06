@@ -55,16 +55,43 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // Find favicons and icons
-    $('link[rel*="icon"]').each((_, element) => {
-      const href = $(element).attr("href");
-      if (href) imageUrls.add(href);
+    // Find favicons and icons with comprehensive selectors
+    const iconSelectors = [
+      'link[rel="icon"]',
+      'link[rel="shortcut icon"]',
+      'link[rel="apple-touch-icon"]',
+      'link[rel="apple-touch-icon-precomposed"]',
+      'link[rel="mask-icon"]',
+      'link[rel="fluid-icon"]',
+      'link[type="image/x-icon"]',
+      'link[type="image/vnd.microsoft.icon"]',
+      'link[type="image/png"]',
+      'link[type="image/gif"]',
+      'link[type="image/jpeg"]',
+      'link[type="image/svg+xml"]',
+    ];
+
+    iconSelectors.forEach((selector) => {
+      $(selector).each((_, element) => {
+        const href = $(element).attr("href");
+        if (href) imageUrls.add(href);
+      });
     });
 
-    // Find apple touch icons
-    $('link[rel="apple-touch-icon"]').each((_, element) => {
-      const href = $(element).attr("href");
-      if (href) imageUrls.add(href);
+    // Try common favicon paths even if not in HTML
+    const commonFaviconPaths = [
+      "/favicon.ico",
+      "/favicon.png",
+      "/favicon.gif",
+      "/favicon.svg",
+      "/apple-touch-icon.png",
+      "/apple-touch-icon-precomposed.png",
+      "/apple-icon.png",
+      "/apple-icon-precomposed.png",
+    ];
+
+    commonFaviconPaths.forEach((path) => {
+      imageUrls.add(path);
     });
 
     // Find manifest icons
@@ -179,26 +206,48 @@ export async function POST(request: NextRequest) {
             headers: {
               "User-Agent":
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+              Accept: "image/*,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.5",
+              "Cache-Control": "no-cache",
             },
           });
 
-          if (!imageResponse.ok) return;
+          if (!imageResponse.ok) {
+            // For favicon requests, try without error to avoid breaking the whole process
+            console.log(`Failed to fetch ${imageUrl}: ${imageResponse.status}`);
+            return;
+          }
 
           imageBuffer = await imageResponse.arrayBuffer();
           const urlObj = new URL(imageUrl);
           const pathname = urlObj.pathname;
           filename = pathname.split("/").pop() || `image_${index + 1}`;
 
-          // Categorize images into folders
-          if (
+          // Categorize images into folders with better favicon detection
+          const isIcon =
             imageUrl.includes("favicon") ||
             imageUrl.includes("icon") ||
-            filename.includes("icon")
-          ) {
+            imageUrl.includes("apple-touch") ||
+            imageUrl.includes("apple-icon") ||
+            imageUrl.includes("mask-icon") ||
+            imageUrl.includes("fluid-icon") ||
+            filename.includes("favicon") ||
+            filename.includes("icon") ||
+            filename.includes("apple-touch") ||
+            filename.includes("apple-icon") ||
+            pathname === "/favicon.ico" ||
+            pathname === "/favicon.png" ||
+            pathname === "/favicon.gif" ||
+            pathname === "/favicon.svg";
+
+          const isLogo = imageUrl.includes("logo") || filename.includes("logo");
+          const isSvg = imageUrl.endsWith(".svg") || filename.endsWith(".svg");
+
+          if (isIcon) {
             folder = iconsFolder;
-          } else if (imageUrl.includes("logo") || filename.includes("logo")) {
+          } else if (isLogo) {
             folder = logosFolder;
-          } else if (imageUrl.endsWith(".svg") || filename.endsWith(".svg")) {
+          } else if (isSvg) {
             folder = svgsFolder;
           }
 
