@@ -39,7 +39,6 @@ export async function POST(request: NextRequest) {
 
     // Extract all image URLs with comprehensive detection
     const imageUrls = new Set<string>();
-    const imageHashes = new Set<string>(); // For duplicate detection
 
     // Find img tags with all possible attributes
     $("img").each((_, element) => {
@@ -170,23 +169,26 @@ export async function POST(request: NextRequest) {
     });
 
     // Parse CSS files for additional background images
-    $('link[rel="stylesheet"], style').each(async (_, element) => {
-      try {
-        let cssContent = "";
-        if (element.tagName === "style") {
-          cssContent = $(element).html() || "";
-        } else {
-          const href = $(element).attr("href");
-          if (href) {
-            const cssUrl = new URL(href, targetUrl).href;
-            const cssResponse = await fetch(cssUrl);
-            if (cssResponse.ok) {
-              cssContent = await cssResponse.text();
-            }
-          }
-        }
+    const cssLinks: string[] = [];
+    const styleElements: string[] = [];
 
-        if (cssContent) {
+    $('link[rel="stylesheet"]').each((_, element) => {
+      const href = $(element).attr("href");
+      if (href) cssLinks.push(href);
+    });
+
+    $("style").each((_, element) => {
+      const content = $(element).html();
+      if (content) styleElements.push(content);
+    });
+
+    // Process CSS files
+    for (const href of cssLinks) {
+      try {
+        const cssUrl = new URL(href, targetUrl).href;
+        const cssResponse = await fetch(cssUrl);
+        if (cssResponse.ok) {
+          const cssContent = await cssResponse.text();
           const cssImagePattern = /url\(['"]?([^'")\s]+)['"]?\)/gi;
           let match;
           while ((match = cssImagePattern.exec(cssContent)) !== null) {
@@ -203,7 +205,27 @@ export async function POST(request: NextRequest) {
       } catch (e) {
         console.log("Failed to parse CSS:", e);
       }
-    });
+    }
+
+    // Process inline styles
+    for (const cssContent of styleElements) {
+      try {
+        const cssImagePattern = /url\(['"]?([^'")\s]+)['"]?\)/gi;
+        let match;
+        while ((match = cssImagePattern.exec(cssContent)) !== null) {
+          if (
+            match[1] &&
+            /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|tiff|tif|avif)/i.test(
+              match[1]
+            )
+          ) {
+            imageUrls.add(match[1]);
+          }
+        }
+      } catch (e) {
+        console.log("Failed to parse inline CSS:", e);
+      }
+    }
 
     // Find SVG elements and convert to data URLs
     $("svg").each((_, element) => {
@@ -236,7 +258,7 @@ export async function POST(request: NextRequest) {
 
     imageSelectors.forEach((selector) => {
       $(selector).each((_, element) => {
-        const tagName = element.tagName?.toLowerCase();
+        const tagName = (element as any).tagName?.toLowerCase();
 
         if (tagName === "video") {
           const poster = $(element).attr("poster");
@@ -352,6 +374,9 @@ export async function POST(request: NextRequest) {
           folder = mimeType === "svg" ? svgsFolder : imagesFolder;
         } else {
           // Regular URL with enhanced fetching
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
           const imageResponse = await fetch(imageUrl, {
             headers: {
               "User-Agent":
@@ -366,8 +391,10 @@ export async function POST(request: NextRequest) {
               "Sec-Fetch-Site": "cross-site",
               Referer: targetUrl.href,
             },
-            timeout: 10000, // 10 second timeout
+            signal: controller.signal,
           });
+
+          clearTimeout(timeoutId);
 
           if (!imageResponse.ok) {
             console.log(`Failed to fetch ${imageUrl}: ${imageResponse.status}`);
