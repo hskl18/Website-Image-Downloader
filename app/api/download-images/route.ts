@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as cheerio from "cheerio";
 import JSZip from "jszip";
+import crypto from "crypto";
 
 export async function POST(request: NextRequest) {
   try {
@@ -36,23 +37,47 @@ export async function POST(request: NextRequest) {
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // Extract all image URLs
+    // Extract all image URLs with comprehensive detection
     const imageUrls = new Set<string>();
+    const imageHashes = new Set<string>(); // For duplicate detection
 
-    // Find img tags
+    // Find img tags with all possible attributes
     $("img").each((_, element) => {
-      const src = $(element).attr("src");
-      const dataSrc = $(element).attr("data-src"); // lazy loading
-      const srcset = $(element).attr("srcset");
+      const attributes = [
+        "src",
+        "data-src",
+        "data-original",
+        "data-lazy",
+        "data-srcset",
+        "data-original-src",
+        "data-lazy-src",
+        "data-echo",
+        "data-url",
+        "data-hi-res-src",
+        "data-low-res-src",
+        "data-medium-res-src",
+        "data-retina-src",
+        "data-2x",
+        "data-3x",
+        "data-4x",
+      ];
 
-      if (src) imageUrls.add(src);
-      if (dataSrc) imageUrls.add(dataSrc);
+      attributes.forEach((attr) => {
+        const value = $(element).attr(attr);
+        if (value) imageUrls.add(value);
+      });
 
-      // Extract from srcset
-      if (srcset) {
-        const srcsetUrls = srcset.split(",").map((s) => s.trim().split(" ")[0]);
-        srcsetUrls.forEach((url) => imageUrls.add(url));
-      }
+      // Extract from srcset and data-srcset
+      const srcsetAttrs = ["srcset", "data-srcset"];
+      srcsetAttrs.forEach((attr) => {
+        const srcset = $(element).attr(attr);
+        if (srcset) {
+          const srcsetUrls = srcset
+            .split(",")
+            .map((s) => s.trim().split(/\s+/)[0]);
+          srcsetUrls.forEach((url) => imageUrls.add(url));
+        }
+      });
     });
 
     // Find favicons and icons with comprehensive selectors
@@ -121,16 +146,62 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Find CSS background images
+    // Find CSS background images and other CSS image properties
     $("*").each((_, element) => {
       const style = $(element).attr("style");
       if (style) {
-        const bgImageMatch = style.match(
-          /background-image:\s*url\(['"]?([^'"]+)['"]?\)/
-        );
-        if (bgImageMatch && bgImageMatch[1]) {
-          imageUrls.add(bgImageMatch[1]);
+        // Match various CSS image properties
+        const imagePatterns = [
+          /background-image:\s*url\(['"]?([^'")\s]+)['"]?\)/gi,
+          /background:\s*url\(['"]?([^'")\s]+)['"]?\)/gi,
+          /content:\s*url\(['"]?([^'")\s]+)['"]?\)/gi,
+          /list-style-image:\s*url\(['"]?([^'")\s]+)['"]?\)/gi,
+          /border-image:\s*url\(['"]?([^'")\s]+)['"]?\)/gi,
+          /cursor:\s*url\(['"]?([^'")\s]+)['"]?\)/gi,
+        ];
+
+        imagePatterns.forEach((pattern) => {
+          let match;
+          while ((match = pattern.exec(style)) !== null) {
+            if (match[1]) imageUrls.add(match[1]);
+          }
+        });
+      }
+    });
+
+    // Parse CSS files for additional background images
+    $('link[rel="stylesheet"], style').each(async (_, element) => {
+      try {
+        let cssContent = "";
+        if (element.tagName === "style") {
+          cssContent = $(element).html() || "";
+        } else {
+          const href = $(element).attr("href");
+          if (href) {
+            const cssUrl = new URL(href, targetUrl).href;
+            const cssResponse = await fetch(cssUrl);
+            if (cssResponse.ok) {
+              cssContent = await cssResponse.text();
+            }
+          }
         }
+
+        if (cssContent) {
+          const cssImagePattern = /url\(['"]?([^'")\s]+)['"]?\)/gi;
+          let match;
+          while ((match = cssImagePattern.exec(cssContent)) !== null) {
+            if (
+              match[1] &&
+              /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|tiff|tif|avif)/i.test(
+                match[1]
+              )
+            ) {
+              imageUrls.add(match[1]);
+            }
+          }
+        }
+      } catch (e) {
+        console.log("Failed to parse CSS:", e);
       }
     });
 
@@ -147,31 +218,107 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // Look for common logo patterns
-    $('img[alt*="logo" i], img[class*="logo" i], img[id*="logo" i]').each(
-      (_, element) => {
-        const src = $(element).attr("src");
-        if (src) imageUrls.add(src);
-      }
-    );
+    // Look for images in various contexts and patterns
+    const imageSelectors = [
+      'img[alt*="logo" i], img[class*="logo" i], img[id*="logo" i]',
+      'img[alt*="banner" i], img[class*="banner" i], img[id*="banner" i]',
+      'img[alt*="hero" i], img[class*="hero" i], img[id*="hero" i]',
+      'img[alt*="thumbnail" i], img[class*="thumbnail" i], img[id*="thumbnail" i]',
+      'img[alt*="avatar" i], img[class*="avatar" i], img[id*="avatar" i]',
+      'img[alt*="profile" i], img[class*="profile" i], img[id*="profile" i]',
+      "picture img, figure img, .image img, .photo img, .picture img",
+      '[style*="background-image"], [style*="background:"]',
+      "video[poster]", // Video poster images
+      "source[srcset]", // Picture element sources
+      'object[data*=".svg"], object[data*=".png"], object[data*=".jpg"], object[data*=".gif"]',
+      'embed[src*=".svg"], embed[src*=".png"], embed[src*=".jpg"], embed[src*=".gif"]',
+    ];
 
-    // Convert relative URLs to absolute URLs
-    const absoluteImageUrls = Array.from(imageUrls)
-      .map((src) => {
-        try {
-          return new URL(src, targetUrl).href;
-        } catch {
-          return null;
+    imageSelectors.forEach((selector) => {
+      $(selector).each((_, element) => {
+        const tagName = element.tagName?.toLowerCase();
+
+        if (tagName === "video") {
+          const poster = $(element).attr("poster");
+          if (poster) imageUrls.add(poster);
+        } else if (tagName === "source") {
+          const srcset = $(element).attr("srcset");
+          if (srcset) {
+            const srcsetUrls = srcset
+              .split(",")
+              .map((s) => s.trim().split(/\s+/)[0]);
+            srcsetUrls.forEach((url) => imageUrls.add(url));
+          }
+        } else if (tagName === "object" || tagName === "embed") {
+          const data = $(element).attr("data") || $(element).attr("src");
+          if (data) imageUrls.add(data);
+        } else {
+          const src = $(element).attr("src") || $(element).attr("data-src");
+          if (src) imageUrls.add(src);
         }
-      })
-      .filter((url): url is string => url !== null)
-      .filter((url) => {
-        // Filter for common image extensions or data URLs
-        const imageExtensions =
-          /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|tiff|tif|avif)(\?.*)?$/i;
-        const isDataUrl = url.startsWith("data:image/");
-        return imageExtensions.test(url) || isDataUrl;
       });
+    });
+
+    // Look for Open Graph and Twitter Card images
+    const metaImageSelectors = [
+      'meta[property="og:image"]',
+      'meta[property="og:image:url"]',
+      'meta[property="og:image:secure_url"]',
+      'meta[name="twitter:image"]',
+      'meta[name="twitter:image:src"]',
+      'meta[property="twitter:image"]',
+      'meta[name="thumbnail"]',
+      'meta[property="article:image"]',
+    ];
+
+    metaImageSelectors.forEach((selector) => {
+      $(selector).each((_, element) => {
+        const content = $(element).attr("content");
+        if (content) imageUrls.add(content);
+      });
+    });
+
+    // Convert relative URLs to absolute URLs and remove duplicates
+    const processedUrls = new Map<string, string>(); // hash -> url for deduplication
+
+    Array.from(imageUrls).forEach((src) => {
+      try {
+        const absoluteUrl = new URL(src, targetUrl).href;
+
+        // Filter for image content
+        const imageExtensions =
+          /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|tiff|tif|avif|jfif|pjpeg|pjp)(\?.*)?$/i;
+        const isDataUrl = absoluteUrl.startsWith("data:image/");
+        const mightBeImage =
+          imageExtensions.test(absoluteUrl) ||
+          isDataUrl ||
+          absoluteUrl.includes("image") ||
+          absoluteUrl.includes("img") ||
+          absoluteUrl.includes("photo") ||
+          absoluteUrl.includes("pic");
+
+        if (mightBeImage) {
+          // Create a hash for deduplication (normalize URL)
+          const normalizedUrl = absoluteUrl
+            .split("?")[0]
+            .split("#")[0]
+            .toLowerCase();
+          const urlHash = crypto
+            .createHash("md5")
+            .update(normalizedUrl)
+            .digest("hex");
+
+          if (!processedUrls.has(urlHash)) {
+            processedUrls.set(urlHash, absoluteUrl);
+          }
+        }
+      } catch (error) {
+        // Skip invalid URLs
+        console.log(`Invalid URL: ${src}`);
+      }
+    });
+
+    const absoluteImageUrls = Array.from(processedUrls.values());
 
     if (absoluteImageUrls.length === 0) {
       return NextResponse.json(
@@ -187,61 +334,99 @@ export async function POST(request: NextRequest) {
     const logosFolder = zip.folder("logos");
     const svgsFolder = zip.folder("svgs");
 
-    // Download images and add to ZIP
+    // Download images and add to ZIP with duplicate detection
+    const downloadedHashes = new Set<string>();
     const downloadPromises = absoluteImageUrls.map(async (imageUrl, index) => {
       try {
         let imageBuffer: ArrayBuffer;
         let filename: string;
         let folder = imagesFolder;
 
-        // Handle data URLs (inline SVGs)
+        // Handle data URLs (inline images)
         if (imageUrl.startsWith("data:image/")) {
+          const mimeMatch = imageUrl.match(/data:image\/([^;]+)/);
+          const mimeType = mimeMatch ? mimeMatch[1] : "svg";
           const base64Data = imageUrl.split(",")[1];
           imageBuffer = Buffer.from(base64Data, "base64").buffer;
-          filename = `inline_svg_${index + 1}.svg`;
-          folder = svgsFolder;
+          filename = `inline_${mimeType}_${index + 1}.${mimeType}`;
+          folder = mimeType === "svg" ? svgsFolder : imagesFolder;
         } else {
-          // Regular URL
+          // Regular URL with enhanced fetching
           const imageResponse = await fetch(imageUrl, {
             headers: {
               "User-Agent":
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-              Accept: "image/*,*/*;q=0.8",
-              "Accept-Language": "en-US,en;q=0.5",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              Accept:
+                "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
+              "Accept-Encoding": "gzip, deflate, br",
               "Cache-Control": "no-cache",
+              "Sec-Fetch-Dest": "image",
+              "Sec-Fetch-Mode": "no-cors",
+              "Sec-Fetch-Site": "cross-site",
+              Referer: targetUrl.href,
             },
+            timeout: 10000, // 10 second timeout
           });
 
           if (!imageResponse.ok) {
-            // For favicon requests, try without error to avoid breaking the whole process
             console.log(`Failed to fetch ${imageUrl}: ${imageResponse.status}`);
             return;
           }
 
           imageBuffer = await imageResponse.arrayBuffer();
+
+          // Check for duplicate content using hash
+          const contentHash = crypto
+            .createHash("md5")
+            .update(Buffer.from(imageBuffer))
+            .digest("hex");
+          if (downloadedHashes.has(contentHash)) {
+            console.log(`Skipping duplicate image: ${imageUrl}`);
+            return;
+          }
+          downloadedHashes.add(contentHash);
+
           const urlObj = new URL(imageUrl);
           const pathname = urlObj.pathname;
           filename = pathname.split("/").pop() || `image_${index + 1}`;
 
-          // Categorize images into folders with better favicon detection
+          // Enhanced categorization
+          const lowerUrl = imageUrl.toLowerCase();
+          const lowerFilename = filename.toLowerCase();
+
           const isIcon =
-            imageUrl.includes("favicon") ||
-            imageUrl.includes("icon") ||
-            imageUrl.includes("apple-touch") ||
-            imageUrl.includes("apple-icon") ||
-            imageUrl.includes("mask-icon") ||
-            imageUrl.includes("fluid-icon") ||
-            filename.includes("favicon") ||
-            filename.includes("icon") ||
-            filename.includes("apple-touch") ||
-            filename.includes("apple-icon") ||
+            lowerUrl.includes("favicon") ||
+            lowerUrl.includes("icon") ||
+            lowerUrl.includes("apple-touch") ||
+            lowerUrl.includes("apple-icon") ||
+            lowerUrl.includes("mask-icon") ||
+            lowerUrl.includes("fluid-icon") ||
+            lowerFilename.includes("favicon") ||
+            lowerFilename.includes("icon") ||
             pathname === "/favicon.ico" ||
             pathname === "/favicon.png" ||
             pathname === "/favicon.gif" ||
-            pathname === "/favicon.svg";
+            pathname === "/favicon.svg" ||
+            lowerUrl.includes("shortcut") ||
+            lowerUrl.includes("manifest");
 
-          const isLogo = imageUrl.includes("logo") || filename.includes("logo");
-          const isSvg = imageUrl.endsWith(".svg") || filename.endsWith(".svg");
+          const isLogo =
+            lowerUrl.includes("logo") ||
+            lowerFilename.includes("logo") ||
+            lowerUrl.includes("brand") ||
+            lowerFilename.includes("brand");
+
+          const isSvg =
+            lowerUrl.includes(".svg") ||
+            lowerFilename.includes(".svg") ||
+            imageResponse.headers.get("content-type")?.includes("svg");
+
+          const isBanner =
+            lowerUrl.includes("banner") ||
+            lowerFilename.includes("banner") ||
+            lowerUrl.includes("hero") ||
+            lowerFilename.includes("hero");
 
           if (isIcon) {
             folder = iconsFolder;
@@ -249,24 +434,46 @@ export async function POST(request: NextRequest) {
             folder = logosFolder;
           } else if (isSvg) {
             folder = svgsFolder;
+          } else if (isBanner) {
+            folder = zip.folder("banners");
           }
 
-          // Ensure filename has an extension
-          if (!filename.includes(".")) {
+          // Determine file extension from content type or URL
+          if (!filename.includes(".") || filename.endsWith("/")) {
             const contentType = imageResponse.headers.get("content-type");
             let extension = ".jpg"; // default
-            if (contentType?.includes("png")) extension = ".png";
-            else if (contentType?.includes("gif")) extension = ".gif";
-            else if (contentType?.includes("webp")) extension = ".webp";
-            else if (contentType?.includes("svg")) extension = ".svg";
-            else if (contentType?.includes("icon")) extension = ".ico";
-            else if (contentType?.includes("avif")) extension = ".avif";
 
+            if (contentType) {
+              if (contentType.includes("png")) extension = ".png";
+              else if (contentType.includes("gif")) extension = ".gif";
+              else if (contentType.includes("webp")) extension = ".webp";
+              else if (contentType.includes("svg")) extension = ".svg";
+              else if (
+                contentType.includes("icon") ||
+                contentType.includes("x-icon")
+              )
+                extension = ".ico";
+              else if (contentType.includes("avif")) extension = ".avif";
+              else if (contentType.includes("bmp")) extension = ".bmp";
+              else if (contentType.includes("tiff")) extension = ".tiff";
+              else if (contentType.includes("jpeg")) extension = ".jpg";
+            } else {
+              // Guess from URL
+              const urlExt = imageUrl.match(
+                /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|tiff|tif|avif|jfif|pjpeg|pjp)(\?|#|$)/i
+              );
+              if (urlExt) extension = `.${urlExt[1].toLowerCase()}`;
+            }
+
+            filename = filename.replace(/\/$/, "") || `image_${index + 1}`;
             filename = `${filename}${extension}`;
           }
         }
 
-        // Avoid duplicate filenames
+        // Sanitize filename
+        filename = filename.replace(/[<>:"/\\|?*]/g, "_").replace(/\s+/g, "_");
+
+        // Avoid duplicate filenames in the same folder
         let finalFilename = filename;
         let counter = 1;
         while (folder?.file(finalFilename)) {
@@ -277,6 +484,7 @@ export async function POST(request: NextRequest) {
         }
 
         folder?.file(finalFilename, imageBuffer);
+        console.log(`Downloaded: ${finalFilename} from ${imageUrl}`);
       } catch (error) {
         console.error(`Failed to download image: ${imageUrl}`, error);
       }

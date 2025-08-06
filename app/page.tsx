@@ -108,28 +108,40 @@ export default function Home() {
         <h3>What gets downloaded:</h3>
         <ul>
           <li>
-            <strong>Images:</strong> All img tags (jpg, png, gif, webp, svg,
-            bmp, ico, avif)
+            <strong>All Image Types:</strong> jpg, jpeg, png, gif, webp, svg,
+            bmp, ico, tiff, avif, jfif
           </li>
           <li>
-            <strong>Icons & Favicons:</strong> favicon.ico, apple-touch-icons,
-            mask-icons, and manifest icons
+            <strong>IMG Elements:</strong> All src, data-src, data-original,
+            data-lazy, srcset attributes
           </li>
           <li>
-            <strong>Logos:</strong> Images with "logo" in alt text, class, or ID
+            <strong>CSS Images:</strong> background-image, background, content,
+            list-style-image, border-image
           </li>
           <li>
-            <strong>SVGs:</strong> Inline SVG elements and SVG files
+            <strong>Meta Images:</strong> Open Graph, Twitter Cards, thumbnails
           </li>
           <li>
-            <strong>Backgrounds:</strong> CSS background images
+            <strong>Icons & Favicons:</strong> All favicon variants,
+            apple-touch-icons, manifest icons
           </li>
           <li>
-            <strong>Lazy loaded:</strong> Images with data-src attributes
+            <strong>Media Elements:</strong> Video posters, picture sources,
+            object/embed images
+          </li>
+          <li>
+            <strong>Inline Content:</strong> SVG elements, data URLs
+          </li>
+          <li>
+            <strong>Smart Detection:</strong> Logos, banners, heroes, avatars,
+            thumbnails
           </li>
         </ul>
         <p style={{ marginTop: "12px", fontSize: "14px", color: "#64748b" }}>
-          Images are organized into folders: images/, icons/, logos/, and svgs/
+          ✨ <strong>Enhanced:</strong> Automatic duplicate removal, organized
+          folders (images/, icons/, logos/, svgs/, banners/), and comprehensive
+          asset detection
         </p>
       </div>
     </div>
