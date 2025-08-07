@@ -2,11 +2,25 @@
 
 import { useState } from "react";
 
+interface ProgressState {
+  progress: number;
+  stage: string;
+  total: number;
+  completed: number;
+  currentFile?: string;
+}
+
 export default function Home() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [progressState, setProgressState] = useState<ProgressState>({
+    progress: 0,
+    stage: "",
+    total: 0,
+    completed: 0,
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,9 +33,16 @@ export default function Home() {
     setLoading(true);
     setError("");
     setSuccess("");
+    setProgressState({
+      progress: 0,
+      stage: "Starting...",
+      total: 0,
+      completed: 0,
+    });
 
     try {
-      const response = await fetch("/api/download-images", {
+      // Try streaming API first
+      const response = await fetch("/api/download-images-stream", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -30,35 +51,129 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to download images");
+        throw new Error("Failed to start download process");
       }
 
-      // Get the zip file as blob
-      const blob = await response.blob();
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
 
-      // Create download link
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = downloadUrl;
-
-      // Extract hostname from URL for filename
-      try {
-        const urlObj = new URL(url);
-        const hostname = urlObj.hostname.replace(/^www\./, "");
-        const sanitizedHostname = hostname.replace(/[^a-zA-Z0-9.-]/g, "_");
-        link.download = `${sanitizedHostname}_images.zip`;
-      } catch {
-        link.download = `images-${new Date().getTime()}.zip`;
+      if (!reader) {
+        throw new Error("Failed to read response stream");
       }
 
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(downloadUrl);
+      while (true) {
+        const { done, value } = await reader.read();
 
-      setSuccess("Images downloaded successfully!");
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              if (data.error) {
+                setError(data.error);
+                setLoading(false);
+                return;
+              }
+
+              if (data.progress !== undefined) {
+                setProgressState({
+                  progress: data.progress,
+                  stage: data.stage,
+                  total: data.total,
+                  completed: data.completed,
+                  currentFile: data.currentFile,
+                });
+              }
+
+              if (data.zipData && data.filename) {
+                // Convert base64 to blob and download
+                const binaryString = atob(data.zipData);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                  bytes[i] = binaryString.charCodeAt(i);
+                }
+                const blob = new Blob([bytes], { type: "application/zip" });
+
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.href = downloadUrl;
+                link.download = data.filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                window.URL.revokeObjectURL(downloadUrl);
+
+                setSuccess(`Successfully downloaded ${data.completed} images!`);
+              }
+            } catch (parseError) {
+              console.error("Failed to parse progress data:", parseError);
+            }
+          }
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      console.error("Streaming failed, trying fallback:", err);
+
+      // Fallback to original API
+      try {
+        setProgressState({
+          progress: 0,
+          stage: "Using fallback method...",
+          total: 0,
+          completed: 0,
+        });
+
+        const fallbackResponse = await fetch("/api/download-images", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ url }),
+        });
+
+        if (!fallbackResponse.ok) {
+          throw new Error("Failed to download images");
+        }
+
+        setProgressState({
+          progress: 90,
+          stage: "Preparing download...",
+          total: 0,
+          completed: 0,
+        });
+
+        const blob = await fallbackResponse.blob();
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = downloadUrl;
+
+        try {
+          const urlObj = new URL(url);
+          const hostname = urlObj.hostname.replace(/^www\./, "");
+          const sanitizedHostname = hostname.replace(/[^a-zA-Z0-9.-]/g, "_");
+          link.download = `${sanitizedHostname}_images.zip`;
+        } catch {
+          link.download = `images-${new Date().getTime()}.zip`;
+        }
+
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(downloadUrl);
+
+        setSuccess("Images downloaded successfully!");
+      } catch (fallbackErr) {
+        setError(
+          fallbackErr instanceof Error
+            ? fallbackErr.message
+            : "An error occurred"
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -93,13 +208,38 @@ export default function Home() {
           {loading ? (
             <>
               <span className="loading"></span>
-              <span>Downloading...</span>
+              <span>Processing...</span>
             </>
           ) : (
             "Download All Images"
           )}
         </button>
       </form>
+
+      {loading && (
+        <div className="progress-container">
+          <div className="progress-info">
+            <div className="progress-stage">{progressState.stage}</div>
+            {progressState.total > 0 && (
+              <div className="progress-stats">
+                {progressState.completed}/{progressState.total} images
+              </div>
+            )}
+            {progressState.currentFile && (
+              <div className="current-file">
+                Currently: {progressState.currentFile}
+              </div>
+            )}
+          </div>
+          <div className="progress-bar">
+            <div
+              className="progress-fill"
+              style={{ width: `${progressState.progress}%` }}
+            ></div>
+          </div>
+          <div className="progress-percentage">{progressState.progress}%</div>
+        </div>
+      )}
 
       {error && <div className="error">{error}</div>}
       {success && <div className="success">{success}</div>}
