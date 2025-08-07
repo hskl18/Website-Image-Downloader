@@ -35,14 +35,13 @@ export default function Home() {
     setSuccess("");
     setProgressState({
       progress: 0,
-      stage: "Starting...",
+      stage: "Analyzing webpage...",
       total: 0,
       completed: 0,
     });
 
     try {
-      // Try streaming API first
-      const response = await fetch("/api/download-images-stream", {
+      const response = await fetch("/api/download-images", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -51,129 +50,48 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to start download process");
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to download images");
       }
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
+      setProgressState({
+        progress: 80,
+        stage: "Preparing download...",
+        total: 0,
+        completed: 0,
+      });
 
-      if (!reader) {
-        throw new Error("Failed to read response stream");
-      }
+      const blob = await response.blob();
 
-      while (true) {
-        const { done, value } = await reader.read();
+      // Create download link
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
 
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-
-              if (data.error) {
-                setError(data.error);
-                setLoading(false);
-                return;
-              }
-
-              if (data.progress !== undefined) {
-                setProgressState({
-                  progress: data.progress,
-                  stage: data.stage,
-                  total: data.total,
-                  completed: data.completed,
-                  currentFile: data.currentFile,
-                });
-              }
-
-              if (data.zipData && data.filename) {
-                // Convert base64 to blob and download
-                const binaryString = atob(data.zipData);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                  bytes[i] = binaryString.charCodeAt(i);
-                }
-                const blob = new Blob([bytes], { type: "application/zip" });
-
-                const downloadUrl = window.URL.createObjectURL(blob);
-                const link = document.createElement("a");
-                link.href = downloadUrl;
-                link.download = data.filename;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                window.URL.revokeObjectURL(downloadUrl);
-
-                setSuccess(`Successfully downloaded ${data.completed} images!`);
-              }
-            } catch (parseError) {
-              console.error("Failed to parse progress data:", parseError);
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.error("Streaming failed, trying fallback:", err);
-
-      // Fallback to original API
+      // Extract hostname from URL for filename
       try {
-        setProgressState({
-          progress: 0,
-          stage: "Using fallback method...",
-          total: 0,
-          completed: 0,
-        });
-
-        const fallbackResponse = await fetch("/api/download-images", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ url }),
-        });
-
-        if (!fallbackResponse.ok) {
-          throw new Error("Failed to download images");
-        }
-
-        setProgressState({
-          progress: 90,
-          stage: "Preparing download...",
-          total: 0,
-          completed: 0,
-        });
-
-        const blob = await fallbackResponse.blob();
-        const downloadUrl = window.URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = downloadUrl;
-
-        try {
-          const urlObj = new URL(url);
-          const hostname = urlObj.hostname.replace(/^www\./, "");
-          const sanitizedHostname = hostname.replace(/[^a-zA-Z0-9.-]/g, "_");
-          link.download = `${sanitizedHostname}_images.zip`;
-        } catch {
-          link.download = `images-${new Date().getTime()}.zip`;
-        }
-
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(downloadUrl);
-
-        setSuccess("Images downloaded successfully!");
-      } catch (fallbackErr) {
-        setError(
-          fallbackErr instanceof Error
-            ? fallbackErr.message
-            : "An error occurred"
-        );
+        const urlObj = new URL(url);
+        const hostname = urlObj.hostname.replace(/^www\./, "");
+        const sanitizedHostname = hostname.replace(/[^a-zA-Z0-9.-]/g, "_");
+        link.download = `${sanitizedHostname}_images.zip`;
+      } catch {
+        link.download = `images-${Date.now()}.zip`;
       }
+
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+
+      setProgressState({
+        progress: 100,
+        stage: "Download complete!",
+        total: 0,
+        completed: 0,
+      });
+      setSuccess("Images downloaded successfully!");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
       setLoading(false);
     }
@@ -248,40 +166,31 @@ export default function Home() {
         <h3>What gets downloaded:</h3>
         <ul>
           <li>
-            <strong>All Image Types:</strong> jpg, jpeg, png, gif, webp, svg,
-            bmp, ico, tiff, avif, jfif
+            <strong>Image Elements:</strong> All img tags with src, data-src,
+            srcset attributes
           </li>
           <li>
-            <strong>IMG Elements:</strong> All src, data-src, data-original,
-            data-lazy, srcset attributes
+            <strong>Background Images:</strong> CSS background-image properties
           </li>
           <li>
-            <strong>CSS Images:</strong> background-image, background, content,
-            list-style-image, border-image
+            <strong>Social Media Images:</strong> Open Graph and Twitter Card
+            images
           </li>
           <li>
-            <strong>Meta Images:</strong> Open Graph, Twitter Cards, thumbnails
+            <strong>Icons & Favicons:</strong> Site icons and favicons
           </li>
           <li>
-            <strong>Icons & Favicons:</strong> All favicon variants,
-            apple-touch-icons, manifest icons
+            <strong>Smart Filtering:</strong> Skips tracking pixels, duplicates,
+            and invalid images
           </li>
           <li>
-            <strong>Media Elements:</strong> Video posters, picture sources,
-            object/embed images
-          </li>
-          <li>
-            <strong>Inline Content:</strong> SVG elements, data URLs
-          </li>
-          <li>
-            <strong>Smart Detection:</strong> Logos, banners, heroes, avatars,
-            thumbnails
+            <strong>All Formats:</strong> jpg, png, gif, webp, svg, ico, and
+            more
           </li>
         </ul>
         <p style={{ marginTop: "12px", fontSize: "14px", color: "#64748b" }}>
-          ✨ <strong>Enhanced:</strong> Automatic duplicate removal, organized
-          folders (images/, icons/, logos/, svgs/, banners/), and comprehensive
-          asset detection
+          ✨ <strong>Fast & Reliable:</strong> Streamlined approach inspired by
+          extract.pics for better performance and success rates
         </p>
       </div>
     </div>
