@@ -1,51 +1,60 @@
 # Website Image Downloader
 
-A Next.js application that allows users to download all images from any website as a ZIP file.
+Website Image Downloader is a bounded Next.js service that extracts public image URLs from a webpage and returns the downloaded files as a ZIP archive.
+The implementation focuses on safe outbound requests, predictable resource use, and reproducible verification.
 
-## Features
+## Safety boundaries
 
-- Enter any website URL
-- Automatically scans for all images (jpg, png, gif, webp, svg, bmp, ico)
-- Downloads images from both `<img>` tags and CSS background images
-- Packages all images into a downloadable ZIP file
-- Clean, responsive user interface
+- Only public HTTP and HTTPS destinations on standard ports are allowed.
+- DNS results are validated and pinned to the outbound connection to reduce DNS-rebinding risk.
+- Every redirect is resolved, validated, and pinned again.
+- Loopback, private, link-local, and cloud metadata destinations are rejected.
+- A page response is limited to 2 MiB.
+- Each image is limited to 8 MiB, and one archive is limited to 32 MiB.
+- One request processes at most 40 images with four concurrent image downloads.
+- One process handles at most two archive jobs at a time and returns `429` with `Retry-After` when full.
+- Outbound requests time out after 10 seconds.
 
-## Getting Started
+These process-local limits are defense in depth.
+A multi-instance deployment should also use platform-level rate limiting and abuse monitoring.
 
-1. Install dependencies:
+## Supported extraction
+
+- HTML `<img src>` attributes.
+- CSS `background-image` URLs found in inline styles.
+- Relative image URLs resolved against the final public page URL.
+- ZIP filenames normalized and deduplicated before download.
+
+## Local development
+
+Use Node.js 22 or newer.
 
 ```bash
-npm install
-```
-
-2. Run the development server:
-
-```bash
+npm ci
 npm run dev
 ```
 
-3. Open [http://localhost:3000](http://localhost:3000) in your browser
+Open <http://localhost:3000>.
 
-## How it works
+The post-install script installs the Chrome build used by Puppeteer.
+Set `PUPPETEER_SKIP_DOWNLOAD=true` only in environments that do not execute browser-backed scraping.
 
-1. User enters a website URL
-2. The app fetches the webpage HTML
-3. Uses Cheerio to parse and extract image URLs from:
-   - `<img>` src attributes
-   - CSS background-image properties
-4. Converts relative URLs to absolute URLs
-5. Downloads all images concurrently
-6. Creates a ZIP file using JSZip
-7. Serves the ZIP file for download
+## Verification
 
-## Technologies Used
+```bash
+npm audit
+npm test
+npm run lint
+npm run typecheck
+npm run build
+```
 
-- Next.js 14 (App Router)
-- TypeScript
-- Cheerio (HTML parsing)
-- JSZip (ZIP file creation)
-- Tailwind CSS (styling)
+The test suite covers blocked network ranges, redirect validation, DNS rebinding, response limits, body cancellation, concurrency limits, and API error responses.
 
-## API Endpoints
+## API
 
-- `POST /api/download-images` - Downloads images from a given URL and returns a ZIP file
+`POST /api/download-images` accepts JSON with a public `url` and returns a ZIP archive when at least one supported image can be downloaded within the configured limits.
+
+## License
+
+This project is available under the [MIT License](LICENSE).
