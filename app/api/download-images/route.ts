@@ -212,7 +212,7 @@ export async function POST(request: NextRequest) {
           return;
 
         // Must look like an image
-        const hasImageExt = /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i.test(
+        const hasImageExt = /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(
           absoluteUrl,
         );
         const hasImageKeyword =

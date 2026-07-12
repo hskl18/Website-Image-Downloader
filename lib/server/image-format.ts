@@ -1,5 +1,5 @@
 export interface ImageFormat {
-  extension: "jpg" | "png" | "gif" | "webp" | "bmp";
+  extension: "jpg" | "png" | "gif" | "webp";
 }
 
 function startsWith(bytes: Uint8Array, signature: readonly number[]) {
@@ -26,6 +26,5 @@ export function detectImageFormat(bytes: Uint8Array): ImageFormat | null {
   ) {
     return { extension: "webp" };
   }
-  if (startsWith(bytes, [0x42, 0x4d])) return { extension: "bmp" };
   return null;
 }

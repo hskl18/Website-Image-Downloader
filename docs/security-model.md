@@ -19,8 +19,8 @@ DNS validation alone is insufficient, so the validated address is pinned into th
 | Undici multi-address lookup mismatch | Pinned lookup supports both a single result and the `{ all: true }` result array | Regression test exercises the exact multi-address callback shape |
 | Oversized request or URL | JSON body is limited to 4 KiB and URL text to 2,048 characters | Declared and streamed body-limit tests fail before egress |
 | Oversized page or image | Page, per-image, total-image, candidate-count, and concurrency limits are applied before ZIP generation | Response-limit and concurrency tests cover declared and streamed excess |
-| Content-type confusion | Explicit non-HTML page responses are rejected and image formats are derived from strong byte signatures | Tests reject PDF pages, arbitrary RIFF files, and invalid image bytes |
-| Misleading or dangerous filenames | Remote extensions are discarded, names are normalized, and detected formats choose the archive extension | Format tests cover JPEG, PNG, GIF, WebP, BMP, and RIFF mismatch |
+| Content-type confusion | Explicit non-HTML page responses are rejected and image formats are derived from strong byte signatures | Tests reject PDF pages, arbitrary RIFF and BM prefixes, and invalid image bytes |
+| Misleading or dangerous filenames | Remote extensions are discarded, names are normalized, and detected formats choose the archive extension | Format tests cover JPEG, PNG, GIF, WebP, and extension mismatch |
 | Early worker failure releasing capacity | New work stops after the first fatal failure and every started worker settles before the job slot is released | Lifecycle tests keep another download pending and confirm a third job still receives `429` |
 | Shared-cache exposure | API success and error responses use `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` | Route assertions and hosted header smoke |
 

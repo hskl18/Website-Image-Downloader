@@ -64,6 +64,7 @@ describe("POST /api/download-images", () => {
     ["IPv6 loopback", "http://[::1]/internal"],
     ["private network", "http://10.0.0.1/internal"],
     ["cloud metadata IP", "http://169.254.169.254/latest/meta-data"],
+    ["IPv4 6a44 relay", "https://192.88.99.2/internal"],
     ["IPv6 NAT64", "https://[64:ff9b::7f00:1]/internal"],
     ["IPv6 local NAT64", "https://[64:ff9b:1::1]/internal"],
     ["IPv6 discard-only", "https://[100::1]/internal"],

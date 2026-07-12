@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import { getDownloadFilename } from "../lib/client/download-filename";
+
 export default function Home() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -34,12 +36,7 @@ export default function Home() {
       const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = downloadUrl;
-      try {
-        const hostname = new URL(url).hostname.replace(/^www\./, "");
-        link.download = `${hostname.replace(/[^a-zA-Z0-9.-]/g, "_")}_images.zip`;
-      } catch {
-        link.download = "public-page-images.zip";
-      }
+      link.download = getDownloadFilename(response);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -135,11 +132,11 @@ export default function Home() {
           </p>
         </article>
         <article className="boundary-card">
-          <p className="boundary-value">5 formats</p>
+          <p className="boundary-value">4 formats</p>
           <h3>Byte-verified files</h3>
           <p>
-            Accepts JPEG, PNG, GIF, WebP, and BMP based on file signatures, not
-            URL claims.
+            Accepts JPEG, PNG, GIF, and WebP based on file signatures, not URL
+            claims.
           </p>
         </article>
         <article className="boundary-card">

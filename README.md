@@ -17,7 +17,7 @@ The implementation focuses on safe outbound requests, predictable resource use, 
 - Discovery retains at most 160 raw candidates, and one request downloads at most 40 images with four concurrent image downloads.
 - One process handles at most two archive jobs at a time and returns `429` with `Retry-After` when full.
 - Outbound requests time out after 10 seconds.
-- Image extensions come from verified JPEG, PNG, GIF, WebP, or BMP signatures rather than remote filenames or MIME claims.
+- Image extensions come from verified JPEG, PNG, GIF, or WebP signatures rather than remote filenames or MIME claims.
 
 These process-local limits are defense in depth.
 A multi-instance deployment should also use platform-level rate limiting and abuse monitoring.

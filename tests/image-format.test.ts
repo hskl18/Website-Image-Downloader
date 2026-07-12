@@ -7,7 +7,6 @@ describe("image format detection", () => {
     ["JPEG", [0xff, 0xd8, 0xff, 0x00], "jpg"],
     ["PNG", [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], "png"],
     ["GIF", [0x47, 0x49, 0x46, 0x38, 0x39, 0x61], "gif"],
-    ["BMP", [0x42, 0x4d, 0x00, 0x00], "bmp"],
     [
       "WebP",
       [0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50],
@@ -23,5 +22,9 @@ describe("image format detection", () => {
     ]);
 
     expect(detectImageFormat(wav)).toBeNull();
+  });
+
+  it("does not treat an arbitrary BM prefix as a validated image", () => {
+    expect(detectImageFormat(new Uint8Array([0x42, 0x4d, 0, 0]))).toBeNull();
   });
 });
