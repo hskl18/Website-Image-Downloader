@@ -3,8 +3,13 @@ import * as cheerio from "cheerio";
 import JSZip from "jszip";
 import crypto from "crypto";
 import { mapWithConcurrency } from "../../../lib/server/concurrency";
-import { EgressPolicyError, safeFetch } from "../../../lib/server/egress";
+import {
+  EgressPolicyError,
+  getFinalUrl,
+  safeFetch,
+} from "../../../lib/server/egress";
 import { JobLimiter } from "../../../lib/server/job-limit";
+import { detectImageFormat } from "../../../lib/server/image-format";
 import {
   ByteBudget,
   readResponseBytes,
@@ -12,69 +17,105 @@ import {
 } from "../../../lib/server/response-limits";
 
 const MAX_PAGE_BYTES = 2 * 1024 * 1024;
+const MAX_REQUEST_BYTES = 4 * 1024;
+const MAX_URL_LENGTH = 2_048;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_IMAGE_COUNT = 40;
+const MAX_DISCOVERED_URLS = 160;
 const MAX_CONCURRENT_DOWNLOADS = 4;
+const MAX_JOB_MS = 30_000;
 const downloadJobLimiter = new JobLimiter(2);
 
-// Simple image validation
-function isValidImage(bytes: Uint8Array): boolean {
-  if (bytes.length < 4) return false;
-
-  // Check common image signatures
-  const signatures = [
-    [0xff, 0xd8, 0xff], // JPEG
-    [0x89, 0x50, 0x4e, 0x47], // PNG
-    [0x47, 0x49, 0x46], // GIF
-    [0x52, 0x49, 0x46, 0x46], // WebP (RIFF)
-    [0x42, 0x4d], // BMP
-  ];
-
-  return signatures.some((sig) => sig.every((byte, i) => bytes[i] === byte));
+function errorResponse(
+  error: string,
+  status: number,
+  headers: Record<string, string> = {},
+) {
+  return NextResponse.json(
+    { error },
+    {
+      status,
+      headers: {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        ...headers,
+      },
+    },
+  );
 }
 
-// Get file extension from URL or content type
-function getFileExtension(url: string, contentType?: string): string {
-  const urlExt = url.match(/\.([a-z0-9]+)(\?|$)/i)?.[1]?.toLowerCase();
-  if (urlExt && ["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(urlExt)) {
-    return urlExt === "jpeg" ? "jpg" : urlExt;
+class RequestInputError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+async function parseTargetUrl(request: NextRequest) {
+  if (!request.headers.get("content-type")?.includes("application/json")) {
+    throw new RequestInputError("Content-Type must be application/json", 415);
   }
 
-  if (contentType?.includes("jpeg")) return "jpg";
-  if (contentType?.includes("png")) return "png";
-  if (contentType?.includes("gif")) return "gif";
-  if (contentType?.includes("webp")) return "webp";
-  if (contentType?.includes("svg")) return "svg";
+  const requestHeaders = new Headers();
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength) requestHeaders.set("content-length", declaredLength);
+  const requestBytes = await readResponseBytes(
+    new Response(request.body, { headers: requestHeaders }),
+    MAX_REQUEST_BYTES,
+  );
+  let body: unknown;
+  try {
+    body = JSON.parse(new TextDecoder().decode(requestBytes));
+  } catch {
+    throw new RequestInputError("Invalid JSON body", 400);
+  }
+  const url =
+    typeof body === "object" && body !== null && "url" in body
+      ? (body as { url?: unknown }).url
+      : undefined;
 
-  return "jpg";
-}
-
-export async function POST(request: NextRequest) {
-  const releaseJob = downloadJobLimiter.tryAcquire();
-  if (!releaseJob) {
-    return NextResponse.json(
-      { error: "Too many download jobs are running" },
-      { status: 429, headers: { "Retry-After": "5" } },
-    );
+  if (typeof url !== "string" || url.length === 0 || url.length > MAX_URL_LENGTH) {
+    throw new RequestInputError("URL is required", 400);
   }
 
   try {
-    const { url } = await request.json();
+    return new URL(url);
+  } catch {
+    throw new RequestInputError("Invalid URL", 400);
+  }
+}
 
-    if (!url) {
-      return NextResponse.json({ error: "URL is required" }, { status: 400 });
+export async function POST(request: NextRequest) {
+  let targetUrl: URL;
+  try {
+    targetUrl = await parseTargetUrl(request);
+  } catch (error) {
+    if (error instanceof RequestInputError) {
+      return errorResponse(error.message, error.status);
     }
-
-    let targetUrl: URL;
-    try {
-      targetUrl = new URL(url);
-    } catch {
-      return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
+    if (error instanceof ResponseLimitError) {
+      return errorResponse(error.message, 413);
     }
+    return errorResponse("Invalid request body", 400);
+  }
 
+  const releaseJob = downloadJobLimiter.tryAcquire();
+  if (!releaseJob) {
+    return errorResponse(
+      "Too many download jobs are running",
+      429,
+      { "Retry-After": "5" },
+    );
+  }
+
+  const jobSignal = AbortSignal.timeout(MAX_JOB_MS);
+  try {
     // Fetch webpage
     const response = await safeFetch(targetUrl, {
+      signal: jobSignal,
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -83,16 +124,33 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       await response.body?.cancel();
-      return NextResponse.json(
-        { error: "Failed to fetch webpage" },
-        { status: 400 }
-      );
+      return errorResponse("Failed to fetch webpage", 400);
+    }
+
+    const pageMediaType = response.headers
+      .get("content-type")
+      ?.split(";", 1)[0]
+      .trim()
+      .toLowerCase();
+    if (
+      pageMediaType &&
+      pageMediaType !== "text/html" &&
+      pageMediaType !== "application/xhtml+xml"
+    ) {
+      await response.body?.cancel();
+      return errorResponse("URL did not return an HTML page", 415);
     }
 
     const htmlBytes = await readResponseBytes(response, MAX_PAGE_BYTES);
     const html = new TextDecoder().decode(htmlBytes);
+    const finalPageUrl = getFinalUrl(response);
     const $ = cheerio.load(html);
     const imageUrls = new Set<string>();
+    const addImageUrl = (candidate: string | undefined) => {
+      if (candidate && imageUrls.size < MAX_DISCOVERED_URLS) {
+        imageUrls.add(candidate);
+      }
+    };
 
     // Extract images from various sources
     // 1. IMG tags
@@ -101,14 +159,14 @@ export async function POST(request: NextRequest) {
         $(el).attr("src") ||
         $(el).attr("data-src") ||
         $(el).attr("data-original");
-      if (src) imageUrls.add(src);
+      addImageUrl(src);
 
       // Handle srcset
       const srcset = $(el).attr("srcset");
       if (srcset) {
         srcset.split(",").forEach((s) => {
           const url = s.trim().split(/\s+/)[0];
-          if (url) imageUrls.add(url);
+          addImageUrl(url);
         });
       }
     });
@@ -120,20 +178,20 @@ export async function POST(request: NextRequest) {
         const bgMatch = style.match(
           /background-image:\s*url\(['"]?([^'")\s]+)['"]?\)/i
         );
-        if (bgMatch?.[1]) imageUrls.add(bgMatch[1]);
+        addImageUrl(bgMatch?.[1]);
       }
     });
 
     // 3. Meta images (Open Graph, Twitter)
     $('meta[property="og:image"], meta[name="twitter:image"]').each((_, el) => {
       const content = $(el).attr("content");
-      if (content) imageUrls.add(content);
+      addImageUrl(content);
     });
 
     // 4. Favicons
     $('link[rel*="icon"]').each((_, el) => {
       const href = $(el).attr("href");
-      if (href) imageUrls.add(href);
+      addImageUrl(href);
     });
 
     // Convert to absolute URLs and filter
@@ -142,7 +200,7 @@ export async function POST(request: NextRequest) {
 
     Array.from(imageUrls).forEach((src) => {
       try {
-        const absoluteUrl = new URL(src, targetUrl).href;
+        const absoluteUrl = new URL(src, finalPageUrl).href;
 
         // Skip duplicates and bad URLs
         if (seenUrls.has(absoluteUrl)) return;
@@ -154,10 +212,9 @@ export async function POST(request: NextRequest) {
           return;
 
         // Must look like an image
-        const hasImageExt =
-          /\.(jpg|jpeg|png|gif|webp|svg|ico|bmp|avif)(\?.*)?$/i.test(
-            absoluteUrl
-          );
+        const hasImageExt = /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i.test(
+          absoluteUrl,
+        );
         const hasImageKeyword =
           /\b(image|img|photo|pic|thumb|avatar|logo|icon|banner)\b/i.test(
             absoluteUrl
@@ -173,7 +230,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (validUrls.length === 0) {
-      return NextResponse.json({ error: "No images found" }, { status: 404 });
+      return errorResponse("No images found", 404);
     }
 
     // Download images
@@ -188,10 +245,11 @@ export async function POST(request: NextRequest) {
       async (imageUrl, index) => {
         try {
           const imageResponse = await safeFetch(imageUrl, {
+            signal: jobSignal,
             headers: {
               "User-Agent":
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-              Referer: targetUrl.href,
+              Referer: finalPageUrl.href,
             },
           });
 
@@ -211,27 +269,21 @@ export async function POST(request: NextRequest) {
 
           // Skip duplicates
           const hash = crypto
-            .createHash("md5")
+            .createHash("sha256")
             .update(Buffer.from(bytes))
             .digest("hex");
           if (downloadedHashes.has(hash)) return;
           downloadedHashes.add(hash);
 
-          // Validate it's actually an image
-          if (!isValidImage(bytes)) return;
+          const imageFormat = detectImageFormat(bytes);
+          if (!imageFormat) return;
 
         // Generate filename
         const urlPath = new URL(imageUrl).pathname;
         let filename = urlPath.split("/").pop() || `image_${index + 1}`;
 
-        // Ensure proper extension
-        const ext = getFileExtension(
-          imageUrl,
-          imageResponse.headers.get("content-type") || undefined
-        );
-        if (!filename.includes(".")) {
-          filename += `.${ext}`;
-        }
+        const baseName = filename.replace(/\.[^.]*$/, "") || `image_${index + 1}`;
+        filename = `${baseName}.${imageFormat.extension}`;
 
         // Sanitize filename
         filename = filename.replace(/[<>:"/\\|?*]/g, "_").substring(0, 100);
@@ -260,38 +312,38 @@ export async function POST(request: NextRequest) {
     );
 
     if (successCount === 0) {
-      return NextResponse.json(
-        { error: "No images could be downloaded" },
-        { status: 404 }
-      );
+      return errorResponse("No images could be downloaded", 404);
     }
 
     // Generate ZIP
     const zipBuffer = await zip.generateAsync({ type: "arraybuffer" });
 
-    const hostname = targetUrl.hostname.replace(/^www\./, "");
+    const hostname = finalPageUrl.hostname.replace(/^www\./, "");
     const filename = `${hostname.replace(/[^a-zA-Z0-9.-]/g, "_")}_images.zip`;
 
     return new NextResponse(zipBuffer, {
       headers: {
         "Content-Type": "application/zip",
         "Content-Disposition": `attachment; filename="${filename}"`,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch (error) {
     if (error instanceof EgressPolicyError) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      return errorResponse(error.message, 400);
     }
 
     if (error instanceof ResponseLimitError) {
-      return NextResponse.json({ error: error.message }, { status: 413 });
+      return errorResponse(error.message, 413);
+    }
+
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      return errorResponse("Download job timed out", 504);
     }
 
     console.error("Error:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return errorResponse("Internal server error", 500);
   } finally {
     releaseJob();
   }

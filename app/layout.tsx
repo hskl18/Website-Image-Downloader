@@ -4,8 +4,9 @@ import { Inter } from "next/font/google";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata = {
-  title: "Image Downloader",
-  description: "Download all images from any website",
+  title: "Bounded Image Archive",
+  description:
+    "Build a resource-bounded ZIP from images referenced by a public HTML page.",
 };
 
 export default function RootLayout({
@@ -15,7 +16,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={inter.className} suppressHydrationWarning={true}>
+      <body className={inter.className}>
         {children}
       </body>
     </html>
