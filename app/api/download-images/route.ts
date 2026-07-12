@@ -2,10 +2,24 @@ import { NextRequest, NextResponse } from "next/server";
 import * as cheerio from "cheerio";
 import JSZip from "jszip";
 import crypto from "crypto";
+import { mapWithConcurrency } from "../../../lib/server/concurrency";
+import { EgressPolicyError, safeFetch } from "../../../lib/server/egress";
+import { JobLimiter } from "../../../lib/server/job-limit";
+import {
+  ByteBudget,
+  readResponseBytes,
+  ResponseLimitError,
+} from "../../../lib/server/response-limits";
+
+const MAX_PAGE_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES = 32 * 1024 * 1024;
+const MAX_IMAGE_COUNT = 40;
+const MAX_CONCURRENT_DOWNLOADS = 4;
+const downloadJobLimiter = new JobLimiter(2);
 
 // Simple image validation
-function isValidImage(buffer: ArrayBuffer): boolean {
-  const bytes = new Uint8Array(buffer);
+function isValidImage(bytes: Uint8Array): boolean {
   if (bytes.length < 4) return false;
 
   // Check common image signatures
@@ -37,6 +51,14 @@ function getFileExtension(url: string, contentType?: string): string {
 }
 
 export async function POST(request: NextRequest) {
+  const releaseJob = downloadJobLimiter.tryAcquire();
+  if (!releaseJob) {
+    return NextResponse.json(
+      { error: "Too many download jobs are running" },
+      { status: 429, headers: { "Retry-After": "5" } },
+    );
+  }
+
   try {
     const { url } = await request.json();
 
@@ -52,7 +74,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch webpage
-    const response = await fetch(url, {
+    const response = await safeFetch(targetUrl, {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -60,13 +82,15 @@ export async function POST(request: NextRequest) {
     });
 
     if (!response.ok) {
+      await response.body?.cancel();
       return NextResponse.json(
         { error: "Failed to fetch webpage" },
         { status: 400 }
       );
     }
 
-    const html = await response.text();
+    const htmlBytes = await readResponseBytes(response, MAX_PAGE_BYTES);
+    const html = new TextDecoder().decode(htmlBytes);
     const $ = cheerio.load(html);
     const imageUrls = new Set<string>();
 
@@ -155,36 +179,46 @@ export async function POST(request: NextRequest) {
     // Download images
     const zip = new JSZip();
     const downloadedHashes = new Set<string>();
+    const byteBudget = new ByteBudget(MAX_TOTAL_IMAGE_BYTES);
     let successCount = 0;
 
-    const downloadPromises = validUrls.map(async (imageUrl, index) => {
-      try {
-        const imageResponse = await fetch(imageUrl, {
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            Referer: targetUrl.href,
-          },
-          signal: AbortSignal.timeout(10000), // 10s timeout
-        });
+    await mapWithConcurrency(
+      validUrls.slice(0, MAX_IMAGE_COUNT),
+      MAX_CONCURRENT_DOWNLOADS,
+      async (imageUrl, index) => {
+        try {
+          const imageResponse = await safeFetch(imageUrl, {
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+              Referer: targetUrl.href,
+            },
+          });
 
-        if (!imageResponse.ok) return;
+          if (!imageResponse.ok) {
+            await imageResponse.body?.cancel();
+            return;
+          }
 
-        const buffer = await imageResponse.arrayBuffer();
+          const bytes = await readResponseBytes(
+            imageResponse,
+            MAX_IMAGE_BYTES,
+            byteBudget,
+          );
 
-        // Skip tiny images (likely tracking pixels)
-        if (buffer.byteLength < 1000) return;
+          // Skip tiny images (likely tracking pixels)
+          if (bytes.byteLength < 1000) return;
 
-        // Skip duplicates
-        const hash = crypto
-          .createHash("md5")
-          .update(Buffer.from(buffer))
-          .digest("hex");
-        if (downloadedHashes.has(hash)) return;
-        downloadedHashes.add(hash);
+          // Skip duplicates
+          const hash = crypto
+            .createHash("md5")
+            .update(Buffer.from(bytes))
+            .digest("hex");
+          if (downloadedHashes.has(hash)) return;
+          downloadedHashes.add(hash);
 
-        // Validate it's actually an image
-        if (!isValidImage(buffer)) return;
+          // Validate it's actually an image
+          if (!isValidImage(bytes)) return;
 
         // Generate filename
         const urlPath = new URL(imageUrl).pathname;
@@ -212,14 +246,18 @@ export async function POST(request: NextRequest) {
           counter++;
         }
 
-        zip.file(finalFilename, buffer);
-        successCount++;
-      } catch (error) {
-        console.log(`Failed to download: ${imageUrl}`);
-      }
-    });
-
-    await Promise.all(downloadPromises);
+          zip.file(finalFilename, bytes);
+          successCount++;
+        } catch (error) {
+          if (
+            error instanceof EgressPolicyError ||
+            error instanceof ResponseLimitError
+          ) {
+            throw error;
+          }
+        }
+      },
+    );
 
     if (successCount === 0) {
       return NextResponse.json(
@@ -241,10 +279,20 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof EgressPolicyError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    if (error instanceof ResponseLimitError) {
+      return NextResponse.json({ error: error.message }, { status: 413 });
+    }
+
     console.error("Error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
     );
+  } finally {
+    releaseJob();
   }
 }
