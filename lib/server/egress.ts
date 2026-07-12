@@ -4,6 +4,7 @@ import { Agent, type Dispatcher } from "undici";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_REDIRECTS = 3;
+const finalResponseUrls = new WeakMap<Response, URL>();
 
 const blockedIpv4Addresses = new BlockList();
 for (const [network, prefix] of [
@@ -16,6 +17,7 @@ for (const [network, prefix] of [
   ["192.0.0.0", 24],
   ["192.0.2.0", 24],
   ["192.168.0.0", 16],
+  ["192.88.99.0", 24],
   ["198.18.0.0", 15],
   ["198.51.100.0", 24],
   ["203.0.113.0", 24],
@@ -30,7 +32,15 @@ for (const [network, prefix] of [
   ["::", 128],
   ["::1", 128],
   ["::ffff:0:0", 96],
+  ["64:ff9b::", 96],
+  ["64:ff9b:1::", 48],
+  ["100::", 64],
+  ["100:0:0:1::", 64],
+  ["2001::", 23],
   ["2001:db8::", 32],
+  ["2002::", 16],
+  ["3fff::", 20],
+  ["5f00::", 16],
   ["fc00::", 7],
   ["fe80::", 10],
   ["ff00::", 8],
@@ -149,11 +159,15 @@ export async function safeFetch(
     let response;
 
     try {
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      const signal = init.signal
+        ? AbortSignal.any([init.signal, timeoutSignal])
+        : timeoutSignal;
       response = await fetchImpl(currentUrl, {
         ...init,
         dispatcher: connection.dispatcher,
         redirect: "manual",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
       });
     } catch (error) {
       await connection.close();
@@ -161,7 +175,12 @@ export async function safeFetch(
     }
 
     if (![301, 302, 303, 307, 308].includes(response.status)) {
-      return attachConnectionLifecycle(response, connection.close);
+      const managedResponse = attachConnectionLifecycle(
+        response,
+        connection.close,
+      );
+      finalResponseUrls.set(managedResponse, new URL(currentUrl));
+      return managedResponse;
     }
 
     const location = response.headers.get("location");
@@ -176,12 +195,30 @@ export async function safeFetch(
   }
 }
 
+export function getFinalUrl(response: Response) {
+  const finalUrl = finalResponseUrls.get(response);
+  if (!finalUrl) {
+    throw new EgressPolicyError();
+  }
+  return new URL(finalUrl);
+}
+
 export function createPinnedLookup(address: ResolvedAddress) {
   return (
     _hostname: string,
-    _options: unknown,
-    callback: (error: Error | null, address: string, family: number) => void,
-  ) => callback(null, address.address, address.family);
+    options: { all?: boolean },
+    callback: (
+      error: Error | null,
+      result: string | ResolvedAddress[],
+      family?: number,
+    ) => void,
+  ) => {
+    if (options.all) {
+      callback(null, [{ address: address.address, family: address.family }]);
+      return;
+    }
+    callback(null, address.address, address.family);
+  };
 }
 
 function createPinnedConnection(address: ResolvedAddress): PinnedConnection {

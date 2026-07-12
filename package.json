@@ -8,15 +8,13 @@
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
-    "postinstall": "node scripts/install-browser.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "cheerio": "1.0.0",
     "jszip": "^3.10.1",
     "next": "15.5.20",
     "postcss": "8.5.17",
-    "puppeteer": "24.43.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "undici": "6.27.0"

@@ -17,20 +17,6 @@ const config = [
     ],
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),
-  {
-    files: ["lib/browser-scraper.ts"],
-    rules: {
-      "@typescript-eslint/no-explicit-any": "off",
-      "@typescript-eslint/no-require-imports": "off",
-      "@typescript-eslint/no-unused-vars": "off",
-    },
-  },
-  {
-    files: ["test-server.js"],
-    rules: {
-      "@typescript-eslint/no-require-imports": "off",
-    },
-  },
 ];
 
 export default config;

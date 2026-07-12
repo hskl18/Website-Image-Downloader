@@ -4,12 +4,17 @@ export async function mapWithConcurrency<T>(
   worker: (item: T, index: number) => Promise<void>,
 ) {
   let nextIndex = 0;
+  let failure: unknown;
 
   async function runWorker() {
-    while (nextIndex < items.length) {
+    while (failure === undefined && nextIndex < items.length) {
       const index = nextIndex;
       nextIndex += 1;
-      await worker(items[index], index);
+      try {
+        await worker(items[index], index);
+      } catch (error) {
+        failure ??= error;
+      }
     }
   }
 
@@ -19,4 +24,5 @@ export async function mapWithConcurrency<T>(
       () => runWorker(),
     ),
   );
+  if (failure !== undefined) throw failure;
 }
