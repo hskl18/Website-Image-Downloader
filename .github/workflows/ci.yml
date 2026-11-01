@@ -31,8 +31,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Audit dependencies
-        run: npm audit
+      # Runtime dependencies must have no advisories at all. The ESLint toolchain's minimatch is fixed
+      # only in minimatch 11, which ESLint cannot use yet, so the full tree gates on high and critical.
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev
+
+      - name: Audit all dependencies
+        run: npm audit --audit-level=high
 
       - name: Test
         run: npm test
