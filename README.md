@@ -47,8 +47,7 @@ Open <http://localhost:3000>.
 ## Verification
 
 ```bash
-npm audit --omit=dev
-npm audit --audit-level=high
+npm audit
 npm test
 npm run lint
 npm run typecheck
