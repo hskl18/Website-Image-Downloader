@@ -82,6 +82,8 @@ Running the current test `keeps the job slot until every started image download 
 With `undici` 6.29.1, Node.js 26.13.0, which bundles undici 8.12.2, rejected the `Agent` with `UND_ERR_INVALID_ARG: invalid onError method`, and every real download returned 500 under `next start`.
 The tests passed for the same reason as the first failure: they stub `fetch`.
 PR #13 moves to `undici` 7.30.2, and real downloads under `next start` returned 200 on Node.js 22.23.4, 24.22.2, and 26.13.0.
+Since then, `tests/egress-connection.test.ts` sends the built-in `fetch` through the pinned `Agent` to a loopback server, and CI runs the tests on Node.js 22, 24, and 26.
+On Node.js 26.13.0 it fails with `UND_ERR_INVALID_ARG` under `undici` 6.29.1 and with `ERR_INVALID_IP_ADDRESS` under the July lookup, so both real-connection failures above would now fail CI.
 
 ### The first version had no egress policy (fixed in #3)
 
@@ -94,6 +96,5 @@ That was a working SSRF, including the cloud metadata address, and a memory-exha
 - The two-job limit is per process, and a serverless platform can run many processes, so it bounds one instance rather than the service.
 - Only the first DNS answer is used, so a host whose first address is unreachable fails instead of falling back to another address.
 - Protection is in the application only; nothing at the network layer stops a future code path that calls `fetch` directly.
-- The unit tests stub `fetch`, so the real connection path is covered only by the manual production check in the README; the first and third failures above are what that gap costs.
-  A test that opens a real loopback connection through `safeFetch` with a test-only policy would close it.
+- The route tests stub `fetch`, and the one real-connection test stays on loopback, so DNS, TLS, and redirects against real hosts are covered only by the manual production check in the README.
 - Extraction is static HTML only, and the URL filter skips images whose URL has neither an image extension nor a word like `image` or `logo`.

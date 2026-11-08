@@ -221,7 +221,7 @@ export function createPinnedLookup(address: ResolvedAddress) {
   };
 }
 
-function createPinnedConnection(address: ResolvedAddress): PinnedConnection {
+export function createPinnedConnection(address: ResolvedAddress): PinnedConnection {
   const dispatcher = new Agent({
     connect: { lookup: createPinnedLookup(address) },
   });

@@ -39,7 +39,8 @@ curl -s -H 'content-type: application/json' \
   https://website-image-downloader.vercel.app/api/download-images
 ```
 
-In CI, 43 tests run without network access and cover blocked address ranges, private DNS answers, DNS rebinding, redirect revalidation, size limits, byte-level format checks, and job concurrency.
+In CI, 44 tests run without internet access and cover blocked address ranges, private DNS answers, DNS rebinding, redirect revalidation, size limits, byte-level format checks, and job concurrency.
+One of them sends the built-in `fetch` through the pinned `Agent` to a loopback server, which catches both real-connection failures in [DESIGN.md](DESIGN.md).
 The [attack matrix](docs/security-model.md) maps each threat to its control and its test, and [DESIGN.md](DESIGN.md) explains the decisions and the failures found along the way.
 
 ## Run locally
@@ -49,7 +50,7 @@ npm ci && npm run dev
 ```
 
 Then open <http://localhost:3000>.
-It needs Node.js 22 or newer; Node.js 22, 24, and 26 were checked on 2026-11-08.
+It needs Node.js 22 or newer; CI runs the tests on Node.js 22, 24, and 26, because each line bundles its own undici.
 
 ## Non-goals
 
