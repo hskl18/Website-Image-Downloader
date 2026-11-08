@@ -24,8 +24,8 @@ DNS validation alone is insufficient, so the validated address is pinned into th
 | Early worker failure releasing capacity | New work stops after the first fatal failure and every started worker settles before the job slot is released | Lifecycle tests keep another download pending and confirm a third job still receives `429` |
 | Shared-cache exposure | API success and error responses use `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` | Route assertions and the production check in the README |
 
-The unit tests stub `fetch`, so the real Undici connection path is not exercised in CI.
-The production check in the [README](../README.md) covers it with real requests, and [DESIGN.md](../DESIGN.md) records the two failures that this gap let through.
+The route tests stub `fetch`; `tests/egress-connection.test.ts` sends the built-in `fetch` through the pinned Undici `Agent` to a loopback server on Node.js 22, 24, and 26.
+DNS, TLS, and redirects against real hosts are covered only by the production check in the [README](../README.md), and [DESIGN.md](../DESIGN.md) records the two failures that stubbed tests let through.
 
 ## Deliberate limitations
 
