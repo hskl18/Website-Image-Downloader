@@ -10,6 +10,10 @@ Live demo: <https://website-image-downloader.vercel.app>
 **Status: v0.2.0, maintained demo.**
 The demo runs the code on `main` with the limits below; it is a public demonstration, not a multi-tenant production service.
 
+![The page refusing the cloud metadata address with "URL is not allowed", above its four limits](docs/media/blocked-metadata-url.png)
+
+*A local production build of `main` on 2026-11-08, after submitting `http://169.254.169.254/latest/meta-data/`.*
+
 Any server that fetches a URL a user typed is an SSRF entry point.
 The user can point it at `127.0.0.1`, a private network, or a cloud metadata endpoint, or reach them indirectly through DNS answers and redirects.
 This project is a small, complete example of closing those paths and bounding the work one request can cause.
