@@ -18,6 +18,15 @@ Any server that fetches a URL a user typed is an SSRF entry point.
 The user can point it at `127.0.0.1`, a private network, or a cloud metadata endpoint, or reach them indirectly through DNS answers and redirects.
 This project is a small, complete example of closing those paths and bounding the work one request can cause.
 
+## Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.svg">
+  <img alt="The browser form sends a page URL to POST /api/download-images, which applies a job limit and a 30-second deadline. The page, and then each image, is fetched through safeFetch, which resolves DNS, refuses private and metadata addresses, pins the connection to the checked IP, and checks every redirect again. The HTML, up to 2 MiB, goes to an extractor that finds up to 160 image URLs with cheerio, and up to 40 images download four at a time, at most 8 MiB each and 32 MiB in total. Each image's bytes are checked for an image format before it goes into the ZIP that returns to the browser." src="docs/architecture-light.svg">
+</picture>
+
+Every outbound request, the page and each image, goes through `safeFetch`, so an image URL in the page, a redirect, or a DNS answer cannot reach an address the policy blocks.
+
 ## Checked against production
 
 On 2026-11-08, each request below was sent with curl to `POST /api/download-images` on the live demo.
