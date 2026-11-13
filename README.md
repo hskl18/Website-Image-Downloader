@@ -26,7 +26,6 @@ This project is a small, complete example of closing those paths and bounding th
 </picture>
 
 Every outbound request, the page and each image, goes through `safeFetch`, so an image URL in the page, a redirect, or a DNS answer cannot reach an address the policy blocks.
-[DESIGN.md](DESIGN.md) explains the decisions, and [docs/security-model.md](docs/security-model.md) maps each threat to its control.
 
 ## Checked against production
 
