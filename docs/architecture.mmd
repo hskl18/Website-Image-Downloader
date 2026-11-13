@@ -1,10 +1,10 @@
 flowchart TD
-  Browser["Browser form"] -->|"page URL"| Route["download-images route<br/>job limit, 30 s budget"]
-  Route -->|"the page,<br/>then each image"| Guard["safeFetch<br/>resolve DNS, refuse private<br/>and metadata addresses,<br/>pin the checked IP"]
+  Browser["Browser form"] -->|"page URL"| Route["download-images route<br/>job limit, 30 s deadline"]
+  Route -->|"the page"| Guard["safeFetch<br/>resolve DNS, refuse private<br/>and metadata addresses,<br/>pin the checked IP"]
   Guard -->|"every redirect<br/>checked again"| Web["Public website"]
-  Web -->|"HTML, up to 2 MB"| Extract["Extract image URLs<br/>cheerio, up to 160"]
+  Web -->|"HTML, up to 2 MiB"| Extract["Extract image URLs<br/>cheerio, up to 160"]
   Extract -->|"up to 40 images,<br/>4 at a time"| Guard
-  Web -->|"image bytes, 8 MB each,<br/>32 MB in total"| Check["Check the bytes<br/>are an image format"]
+  Web -->|"image bytes, 8 MiB each,<br/>32 MiB in total"| Check["Check the bytes<br/>are an image format"]
   Check --> Zip["ZIP of the images"]
   Zip -->|"application/zip"| Browser
 %% Edit this file; the owner renders architecture-light.svg and architecture-dark.svg from it with a shared theme.

@@ -22,11 +22,11 @@ This project is a small, complete example of closing those paths and bounding th
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.svg">
-  <img alt="The browser form sends a page URL to POST /api/download-images, which applies a job limit and a 30-second budget. The page, and then each image, is fetched through safeFetch, which resolves DNS, refuses private and metadata addresses, pins the connection to the checked IP, and checks every redirect again. The HTML, up to 2 MB, goes to an extractor that finds up to 160 image URLs with cheerio, and up to 40 images download four at a time, at most 8 MB each and 32 MB in total. Each image's bytes are checked for an image format before it goes into the ZIP that returns to the browser." src="docs/architecture-light.svg">
+  <img alt="The browser form sends a page URL to POST /api/download-images, which applies a job limit and a 30-second deadline. The page, and then each image, is fetched through safeFetch, which resolves DNS, refuses private and metadata addresses, pins the connection to the checked IP, and checks every redirect again. The HTML, up to 2 MiB, goes to an extractor that finds up to 160 image URLs with cheerio, and up to 40 images download four at a time, at most 8 MiB each and 32 MiB in total. Each image's bytes are checked for an image format before it goes into the ZIP that returns to the browser." src="docs/architecture-light.svg">
 </picture>
 
-Every outbound request, the page and each image, goes through the same guard, so a redirect or a DNS answer cannot steer the server to an address it already refused.
-[DESIGN.md](DESIGN.md) explains the decisions, and [docs/security-model.md](docs/security-model.md) lists each control.
+Every outbound request, the page and each image, goes through `safeFetch`, so an image URL in the page, a redirect, or a DNS answer cannot reach an address the policy blocks.
+[DESIGN.md](DESIGN.md) explains the decisions, and [docs/security-model.md](docs/security-model.md) maps each threat to its control.
 
 ## Checked against production
 
