@@ -14,7 +14,7 @@
     "@vercel/speed-insights": "^2.0.0",
     "cheerio": "1.0.0",
     "jszip": "^3.10.1",
-    "next": "15.5.28",
+    "next": "15.5.29",
     "postcss": "8.5.28",
     "react": "19.2.8",
     "react-dom": "19.2.8",
